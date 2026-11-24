@@ -36,12 +36,13 @@ Android's phantom-process killer. Redo step 2 of the README. Some phones reset t
 after a reboot.
 
 ### Answers take a long time / voice mode seems stuck
-Each answer starts a fresh Claude Code process inside proot. Start-up time grows with
-the size of the folder Claude starts in, which is why `dhyan` runs from
-`~/.dhyan-voice` (~10 s per answer on a mid-range phone) instead of `~/brain`
-(~37 s). The screen shows `(thinking…)` while it works, and you'll hear "One moment"
-right after it hears you. If an answer never arrives, check your internet connection
-and that `cd ~/brain && claude` works interactively.
+The first answer of a session is slower (~15–20 s) because Claude Code starts up then;
+after that answers take a few seconds. Each answer prints its timing, like
+`[photo 2s · answer 3s]`. If every answer is slow:
+- Update (`cd ~/dhyan && git pull && bash install.sh`). Older versions started a new
+  Claude process per question, which took 10–70 s each.
+- Test without voice: `DHYAN_ASK="what do you see?" dhyan`.
+- Check your internet connection and that `cd ~/brain && claude` works interactively.
 
 ### Photos are black
 The camera saw nothing: the phone was face-down or the lens was covered, or the room

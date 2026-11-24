@@ -68,20 +68,29 @@ the hook finishes ("Hook cancelled"), so scanning transcripts is more reliable.
 
 ## The `dhyan` loop
 
-1. Vibrate briefly, then `termux-speech-to-text` (Android's recogniser).
-2. Say "One moment" (in the background) so you know it heard you.
-3. Take a photo with `termux-camera-photo` (unless `--no-camera`).
-4. `claude -p --continue` with the question and the photo path; only `Read`,
-   `WebSearch` and `WebFetch` are allowed, so voice mode can't change files.
-5. `termux-tts-speak` the answer.
-6. On "stop", file the session into `~/brain`.
+1. Start Claude Code **once**, in streaming mode
+   (`claude -p --input-format stream-json --output-format stream-json`), as a bash
+   coprocess that stays running for the whole session.
+2. Vibrate briefly, then `termux-speech-to-text` (Android's recogniser).
+3. Say "One moment" (in the background) so you know it heard you.
+4. Take a photo with `termux-camera-photo` (unless `--no-camera`).
+5. Send one JSON message with the question and the photo **embedded as base64**, so
+   Claude sees it directly without a tool round trip. Only `Read`, `WebSearch` and
+   `WebFetch` are allowed, so voice mode can't change files.
+6. Read output lines until the `result` message, then `termux-tts-speak` the answer.
+7. On "stop", close Claude and file the session into `~/brain`.
 
-Voice mode runs Claude from its own small folder, `~/.dhyan-voice`, not from
-`~/brain`. Measured on a mid-range phone (Snapdragon 680), a one-line answer took
-**~10 s** from a small folder but **~37 s** from `~/brain`: Claude Code's start-up
-scan of a bigger project folder is slow under proot. `brain-file` picks up voice
-conversations from both folders.
+### Why it's built this way: measured on a mid-range phone (Snapdragon 680)
 
-Where the time goes per question (same phone): photo ~2.4 s, speaking ~3 s, Claude
-start-up and answer ~10 s. Model choice (Haiku, Sonnet, Opus) made little difference;
-start-up dominates. It's a conversation, not a live video stream.
+| Approach | Time per answer |
+|---|---|
+| New `claude -p` per question, started in `~/brain` | 37–76 s |
+| New `claude -p` per question, started in a small folder | ~10 s |
+| **One long-running Claude, photo embedded (current)** | **first ~18 s (includes start-up), then ~2 s** |
+
+Photo ~2.4 s and speaking ~3 s come on top. Model choice made little difference
+compared with start-up cost; voice mode defaults to Sonnet (`DHYAN_MODEL` to change).
+Voice mode runs from `~/.dhyan-voice` because Claude Code's start-up scan of a bigger
+folder is slow under proot; `brain-file` files conversations from both folders.
+
+Test without speaking: `DHYAN_ASK="what do you see?" dhyan` prints two timed answers.

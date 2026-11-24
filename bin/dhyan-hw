@@ -4,6 +4,9 @@
 # Requests arrive as files in $PREFIX/tmp/dhyan-hw (shared with Ubuntu as /tmp).
 # Only commands named termux-<something> are allowed.
 Q="$PREFIX/tmp/dhyan-hw"; mkdir -p "$Q"; chmod 700 "$Q"
+# only one helper at a time
+old=$(cat "$Q/daemon.pid" 2>/dev/null)
+if [ -n "$old" ] && [ "$old" != $$ ] && kill -0 "$old" 2>/dev/null; then exit 0; fi
 echo $$ > "$Q/daemon.pid"
 while true; do
   for req in "$Q"/*.req; do
