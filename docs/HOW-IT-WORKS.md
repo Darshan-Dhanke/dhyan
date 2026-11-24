@@ -68,17 +68,41 @@ the hook finishes ("Hook cancelled"), so scanning transcripts is more reliable.
 
 ## The `dhyan` loop
 
-1. Start Claude Code **once**, in streaming mode
+1. Start Claude Code **once per conversation**, in streaming mode
    (`claude -p --input-format stream-json --output-format stream-json`), as a bash
-   coprocess that stays running for the whole session.
-2. Vibrate briefly, then `termux-speech-to-text` (Android's recogniser).
-3. Say "One moment" (in the background) so you know it heard you.
-4. Take a photo with `termux-camera-photo` (unless `--no-camera`).
-5. Send one JSON message with the question and the photo **embedded as base64**, so
+   coprocess that stays running.
+2. **Wait for a tap** (default): a persistent `termux-notification` has **Talk** and
+   **Stop** buttons whose actions just `touch` a file in `$PREFIX/tmp`; Enter in the
+   terminal works too. `--always` skips this and listens continuously.
+3. **Listen and join.** Android's recogniser (`termux-speech-to-text`) ends at the first
+   ~1–2 s pause, so after each chunk Dhyan listens again and appends what it hears.
+   It sends when a listen comes back empty (silence), or immediately if the message ends
+   with "over".
+4. **Commands** are handled locally: stop, new topic, which/list projects, switch to
+   `<project>`.
+5. Say "One moment" (in the background) and take a photo (unless `--no-camera`).
+6. Send one JSON message with the question and the photo **embedded as base64**, so
    Claude sees it directly without a tool round trip. Only `Read`, `WebSearch` and
    `WebFetch` are allowed, so voice mode can't change files.
-6. Read output lines until the `result` message, then `termux-tts-speak` the answer.
-7. On "stop", close Claude and file the session into `~/brain`.
+7. Read output lines until the `result` message, then `termux-tts-speak` the answer.
+8. Listen once more for a follow-up without a tap; if silent, go back to step 2.
+
+### Projects
+
+"switch to X" picks a folder in `~/brain/topics`: first by matching words in the folder
+name, and if none match, by asking the running Claude which existing folder means the
+same thing (so "drone" finds `quadcopter-diy`). Then it ends the current conversation
+(filed in the background) and starts a new Claude with
+`--append-system-prompt` holding the project's name and the last ~6 KB of its notes.
+The first message of each conversation starts with `Project: <name>`, which tells
+`brain-file` where to file it.
+
+### Filing
+
+`brain-file` files each finished conversation once. It skips conversations a running
+`dhyan` has marked active (`~/brain/.queue/active.<session-id>`) and anything written in
+the last 60 s, and records filed session ids in `~/brain/.queue/filed`. A conversation
+that wanders across unrelated topics is split into several topic folders.
 
 ### Why it's built this way: measured on a mid-range phone (Snapdragon 680)
 

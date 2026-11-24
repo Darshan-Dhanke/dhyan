@@ -1,106 +1,228 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# dhyan — hands-free voice + camera assistant.
-# Listens with Android speech recognition, takes a photo for each question,
-# asks Claude (your Claude subscription, via Claude Code), and speaks the answer.
-# Say "stop" or "goodbye" to end.
-#   dhyan                 camera on (rear)
-#   dhyan --no-camera     voice only
-#   dhyan --front         front camera
-#   DHYAN_MODEL=opus dhyan   pick the model (default: sonnet — fastest good answers)
+# dhyan — hands-free voice + camera assistant on Android, powered by Claude Code.
 #
-# Speed: Claude Code is started ONCE per session in streaming mode and kept running,
-# so each question costs only the model's answer time (no ~10 s start-up per question).
-# Photos are sent inside the message, not opened with a tool. It runs from a small
-# folder (~/.dhyan-voice) because start-up inside the bigger ~/brain is much slower;
-# brain-file still files these conversations into ~/brain afterwards.
-V="$HOME/.dhyan-voice"
+#   dhyan               tap-to-talk (notification "Talk" button, or Enter in Termux)
+#   dhyan --always      keep listening after every answer (old behaviour)
+#   dhyan --no-camera   voice only          dhyan --front   use the front camera
+#   dhyan --type        type instead of speaking (testing / quiet places)
+#   DHYAN_MODEL=opus dhyan   pick the model (default: sonnet)
+#   DHYAN_ASK="what do you see?" dhyan   one typed question, prints timings, exits
+#
+# While talking:
+#   pause briefly  → it keeps listening and joins the pieces into one message
+#   say "over"     → send right away          stay silent → message is sent
+#   "switch to <project>" · "new topic" · "which project" · "list projects" · "stop"
+#
+# Claude Code is started once per conversation in streaming mode and kept running,
+# so follow-up answers take seconds. Each project gets its own conversation; it is
+# filed into ~/brain/topics/<project>/ when you switch away or stop.
+
+V="$HOME/.dhyan-voice"; B="$HOME/brain"; Q="$B/.queue"
 MODEL="${DHYAN_MODEL:-sonnet}"
-mkdir -p "$V/inbox"
+TRIG="$PREFIX/tmp/dhyan-talk"; STOPF="$PREFIX/tmp/dhyan-stop"
+mkdir -p "$V/inbox" "$Q" "$B/topics"
 [ -f "$V/CLAUDE.md" ] || cat > "$V/CLAUDE.md" <<'EOF'
 # Dhyan voice mode
 You are answering spoken questions on the user's Android phone. Answers are read aloud
 through earphones: 1-3 short sentences, plain text, no markdown or lists.
 A photo from the phone camera may be attached to each question; use it when the
 question is about what the user is looking at. Say so if the photo is dark or blurry.
+Speech recognition can mishear words; if a question looks garbled, ask briefly.
 The user's notes live in /root/brain (index.md lists topics) if they ask about them.
 EOF
 cd "$V" || exit 1
-CAM=0; USE_CAM=1
+
+CAM=0; USE_CAM=1; MODE=tap; TYPE=0; JOIN="${DHYAN_JOIN:-1}"
 for a in "$@"; do
   case "$a" in
-    --no-camera) USE_CAM=0 ;;
-    --front) CAM=1 ;;
+    --no-camera) USE_CAM=0 ;; --front) CAM=1 ;;
+    --always) MODE=always ;; --type) TYPE=1 ;;
   esac
 done
 
-say() { termux-tts-speak "$1" >/dev/null 2>&1; }
-ms()  { echo $(( $(date +%s%N) / 1000000 )); }
+say()  { echo "dhyan: $1"; [ $TYPE = 1 ] || termux-tts-speak "$1" >/dev/null 2>&1; }
+buzz() { termux-vibrate -d "${1:-60}" >/dev/null 2>&1; }
+ms()   { echo $(( $(date +%s%N) / 1000000 )); }
+notify() {
+  termux-notification --id dhyan --ongoing --priority high --title "Dhyan${PROJECT:+ · $PROJECT}" \
+    --content "$1" --button1 "Talk" --button1-action "touch '$TRIG'" \
+    --button2 "Stop" --button2-action "touch '$STOPF'" >/dev/null 2>&1
+}
 
-# --- start Claude once, keep it running ---
-coproc CL { "$HOME/bin/claude-raw" -p --input-format stream-json --output-format stream-json \
-              --verbose --model "$MODEL" --allowedTools "Read" "WebSearch" "WebFetch" 2>/dev/null; }
-CL_IN=${CL[1]}; CL_OUT=${CL[0]}; CL_PID=$CL_PID
-cleanup() { exec {CL_IN}>&- 2>/dev/null; kill "$CL_PID" 2>/dev/null; }
+# ---------- Claude (one running conversation per project) ----------
+PROJECT=""; SID=""; FIRST=1; CL_PID=""
+start_claude() {
+  local extra=()
+  if [ -n "$PROJECT" ] && [ -s "$B/topics/$PROJECT/notes.md" ]; then
+    extra=(--append-system-prompt "Current project: $PROJECT. Most recent part of its notes (full file: /root/brain/topics/$PROJECT/notes.md):
+$(tail -c 6000 "$B/topics/$PROJECT/notes.md")")
+  elif [ -n "$PROJECT" ]; then
+    extra=(--append-system-prompt "Current project: $PROJECT (new, no notes yet).")
+  fi
+  coproc CL { "$HOME/bin/claude-raw" -p --input-format stream-json --output-format stream-json \
+                --verbose --model "$MODEL" --allowedTools "Read" "WebSearch" "WebFetch" \
+                "${extra[@]}" 2>/dev/null; }
+  CL_IN=${CL[1]}; CL_OUT=${CL[0]}; CL_PID=$CL_PID; SID=""; FIRST=1
+}
+stop_claude() {   # end this conversation and file it
+  [ -n "$CL_PID" ] || return
+  exec {CL_IN}>&- 2>/dev/null
+  kill "$CL_PID" 2>/dev/null; wait "$CL_PID" 2>/dev/null
+  [ -n "$SID" ] && rm -f "$Q/active.$SID"
+  CL_PID=""; SID=""
+  nohup bash -c "sleep 65; '$HOME/bin/brain-file'" >/dev/null 2>&1 &
+}
+cleanup() { stop_claude; termux-notification-remove dhyan >/dev/null 2>&1; rm -f "$TRIG" "$STOPF"; }
 trap cleanup EXIT
 
-ask() {   # $1 = text, $2 = optional jpeg path → prints Claude's answer
+ask() {   # $1 = text, $2 = optional jpeg → sets ANSWER (no subshell, so SID/FIRST persist)
+  local text="$1" line t; ANSWER=""
+  [ $FIRST = 1 ] && text="Project: ${PROJECT:-none}. $text"; FIRST=0
   if [ -n "${2:-}" ] && [ -s "$2" ]; then
     base64 -w0 "$2" > "$V/.img.b64"
-    jq -cn --arg t "$1" --rawfile img "$V/.img.b64" \
+    jq -cn --arg t "$text" --rawfile img "$V/.img.b64" \
       '{type:"user",message:{role:"user",content:[{type:"image",source:{type:"base64",media_type:"image/jpeg",data:$img}},{type:"text",text:$t}]}}' \
       >&"$CL_IN" || return 1
     rm -f "$V/.img.b64"
   else
-    jq -cn --arg t "$1" '{type:"user",message:{role:"user",content:[{type:"text",text:$t}]}}' >&"$CL_IN" || return 1
+    jq -cn --arg t "$text" '{type:"user",message:{role:"user",content:[{type:"text",text:$t}]}}' >&"$CL_IN" || return 1
   fi
-  local line
   while IFS= read -r -t 180 line <&"$CL_OUT"; do
-    if [ "$(jq -r '.type // empty' <<<"$line" 2>/dev/null)" = result ]; then
-      jq -r '.result // empty' <<<"$line"; return 0
+    t=$(jq -r '.type // empty' <<<"$line" 2>/dev/null)
+    if [ -z "$SID" ]; then
+      SID=$(jq -r '.session_id // empty' <<<"$line" 2>/dev/null)
+      [ -n "$SID" ] && touch "$Q/active.$SID"     # don't file while still talking
     fi
+    [ "$t" = result ] && { ANSWER=$(jq -r '.result // empty' <<<"$line"); return 0; }
   done
   return 1
 }
 
-# Typed test without voice: DHYAN_ASK="what do you see?" dhyan
-if [ -n "${DHYAN_ASK:-}" ]; then
-  img=""; [ $USE_CAM = 1 ] && { img="$V/inbox/test.jpg"; termux-camera-photo -c $CAM "$img" >/dev/null 2>&1; }
-  for i in 1 2; do
-    t0=$(ms); a=$(ask "$DHYAN_ASK" "$img"); t1=$(ms)
-    echo "answer $i ($(( (t1-t0)/1000 ))s): $a"
-    img=""
+# ---------- listening ----------
+stt() { termux-speech-to-text 2>/dev/null | tr -d '\r' | tail -n 1; }
+END_RE="[ ,.]*(over|send it|that's it|thats it)[.!]?$"
+listen_message() {   # sets MSG; returns 1 if nothing was said
+  local m p
+  if [ $TYPE = 1 ]; then read -r -p "you> " m || return 1; MSG="$m"; [ -n "$m" ]; return; fi
+  buzz 60; echo "(listening…)"
+  m=$(stt); [ -z "$m" ] && return 1
+  while :; do
+    if [[ "${m,,}" =~ $END_RE ]]; then m=$(sed -E "s/$END_RE//I" <<<"$m"); break; fi
+    [ "$JOIN" = 1 ] || break
+    echo "(heard: $m — keep talking, say \"over\", or pause to send)"
+    buzz 25
+    p=$(stt); [ -z "$p" ] && break
+    m="$m $p"
   done
-  exit 0
-fi
+  MSG="$m"; [ -n "$MSG" ]
+}
+wait_for_tap() {   # notification "Talk" button or Enter in Termux; returns 1 on Stop
+  rm -f "$TRIG"; notify "Tap Talk to speak"
+  echo "(waiting — tap Talk in the notification, or press Enter here)"
+  while :; do
+    [ -e "$STOPF" ] && return 1
+    [ -e "$TRIG" ] && { rm -f "$TRIG"; return 0; }
+    read -r -t 0.3 _ </dev/tty && return 0
+  done
+}
 
-say "Dhyan is listening."
-while true; do
-  kill -0 "$CL_PID" 2>/dev/null || { echo "Claude stopped unexpectedly."; say "Claude stopped. Please restart Dhyan."; break; }
-  termux-vibrate -d 60 >/dev/null 2>&1
-  echo "(listening…)"
-  q=$(termux-speech-to-text 2>/dev/null | tr -d '\r' | tail -n 1)
-  [ -z "$q" ] && continue
-  echo "you: $q"
-  case "${q,,}" in
-    stop|goodbye|"stop listening"|exit|bye) say "Bye."; break ;;
+# ---------- projects ----------
+slugify() { tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g'; }
+list_projects() { ls -1 "$B/topics" 2>/dev/null | tr '-' ' ' | paste -sd, -; }
+resolve_project() {   # $1 = spoken name → echoes existing or new slug
+  local want words best="" bestn=0 d n w
+  want=$(slugify "$1"); words=$(tr '-' ' ' <<<"$want")
+  for d in "$B"/topics/*/; do
+    d=$(basename "$d"); n=0
+    for w in $words; do [ ${#w} -gt 2 ] && [[ "$d" == *"$w"* ]] && n=$((n+1)); done
+    [ $n -gt $bestn ] && { best=$d; bestn=$n; }
+  done
+  [ -n "$best" ] && echo "$best" || echo "$want"
+}
+resolve_project_smart() {   # $1 = spoken name → sets SLUG; asks Claude if no word match
+  local quick list r
+  quick=$(resolve_project "$1")
+  list=$(ls -1 "$B/topics" 2>/dev/null | paste -sd, -)
+  if [ -d "$B/topics/$quick" ] || [ -z "$list" ] || [ -z "$CL_PID" ]; then SLUG="$quick"; return; fi
+  ask "Routing question from the Dhyan app, not part of the conversation: the user said \"switch to $1\". Existing project folders: $list. Reply with ONLY the folder name that clearly means the same project (synonyms count, e.g. drone = quadcopter), or NEW if none fits."
+  r=$(tr -d ' .`"\r\n' <<<"$ANSWER")
+  if [ -n "$r" ] && [ "$r" != NEW ] && [ -d "$B/topics/$r" ]; then SLUG="$r"; else SLUG="$quick"; fi
+}
+handle_command() {   # returns 0 if MSG was a command
+  local lc=${MSG,,}; lc=$(sed -E 's/[.!?]+$//; s/^ +| +$//g' <<<"$lc")
+  case "$lc" in
+    stop|goodbye|bye|exit|"stop listening") say "Bye."; return 2 ;;
+    "new topic"|"new conversation"|"start over"|"fresh start")
+      stop_claude; PROJECT=""; start_claude; say "Okay, new topic."; return 0 ;;
+    "which project"*|"what project"*)
+      if [ -n "$PROJECT" ]; then say "You are in the ${PROJECT//-/ } project."
+      else say "No project selected."; fi
+      return 0 ;;
+    "list projects"|"what projects"*|"which projects"*)
+      local l; l=$(list_projects); say "${l:-No projects yet.}"; return 0 ;;
   esac
-  t0=$(ms)
-  say "One moment." & ack=$!
-  img=""
-  if [ $USE_CAM = 1 ]; then
-    img="$V/inbox/$(date +%s).jpg"
-    termux-camera-photo -c $CAM "$img" >/dev/null 2>&1
+  local sw_re='^(switch|change|go|move)( over)?( back)? to( the)?( project)? (.+)$'
+  local op_re='^(open|work on|continue)( the)?( project)? (.+)$'
+  if [[ "$lc" =~ $sw_re ]] || [[ "$lc" =~ $op_re ]]; then
+    local name="${BASH_REMATCH[-1]}"; name=$(sed -E 's/ project$//' <<<"$name")
+    resolve_project_smart "$name"; local slug="$SLUG"
+    stop_claude; PROJECT="$slug"; start_claude
+    if [ -d "$B/topics/$slug" ]; then say "Switched to ${slug//-/ }."
+    else say "Started a new project, ${slug//-/ }."; fi
+    return 0
   fi
-  t1=$(ms)
-  echo "(thinking…)"
-  a=$(ask "Spoken question: $q" "$img")
+  return 1
+}
+
+# ---------- one question ----------
+answer() {
+  local t0 t1 t2 img="" ack a
+  t0=$(ms)
+  if [ $TYPE = 0 ]; then termux-tts-speak "One moment." >/dev/null 2>&1 & ack=$!; fi
+  if [ $USE_CAM = 1 ]; then
+    img="$V/inbox/$(date +%s).jpg"; termux-camera-photo -c $CAM "$img" >/dev/null 2>&1
+  fi
+  t1=$(ms); echo "(thinking…)"
+  ask "Spoken question: $MSG" "$img"; a="$ANSWER"
+  if [ -z "$a" ] && ! kill -0 "$CL_PID" 2>/dev/null; then   # Claude died: restart once
+    start_claude; ask "Spoken question: $MSG" "$img"; a="$ANSWER"
+  fi
   [ -z "$a" ] && a="Sorry, I couldn't get an answer."
   t2=$(ms)
-  echo "dhyan: $a"
-  echo "   [photo $(( (t1-t0)/1000 ))s · answer $(( (t2-t1)/1000 ))s]"
-  wait "$ack" 2>/dev/null   # let "One moment" finish (don't wait on the Claude process)
+  [ -n "${ack:-}" ] && wait "$ack" 2>/dev/null
   say "$a"
-  ls -1t "$V"/inbox/*.jpg 2>/dev/null | tail -n +21 | xargs -r rm -f   # keep last 20 photos
+  echo "   [photo $(( (t1-t0)/1000 ))s · answer $(( (t2-t1)/1000 ))s]"
+  ls -1t "$V"/inbox/*.jpg 2>/dev/null | tail -n +21 | xargs -r rm -f
+}
+
+# ---------- main ----------
+start_claude
+if [ -n "${DHYAN_ASK:-}" ]; then
+  for i in 1 2; do MSG="$DHYAN_ASK"; answer; [ $i = 1 ] && USE_CAM=0; done
+  exit 0
+fi
+rm -f "$STOPF"
+say "Dhyan is ready."
+while :; do
+  if [ $MODE = tap ] && [ $TYPE = 0 ]; then wait_for_tap || { say "Bye."; break; }; fi
+  notify "Listening…"
+  listen_message || continue
+  echo "you: $MSG"
+  handle_command; rc=$?
+  [ $rc = 2 ] && break
+  [ $rc = 0 ] && continue
+  notify "Thinking…"
+  answer
+  # one follow-up without tapping
+  if [ $MODE = tap ] && [ $TYPE = 0 ]; then
+    notify "Listening for a follow-up…"
+    while listen_message; do
+      echo "you: $MSG"
+      handle_command; rc=$?
+      [ $rc = 2 ] && break 2
+      [ $rc = 0 ] && continue
+      notify "Thinking…"; answer; notify "Listening for a follow-up…"
+    done
+  fi
+  [ -e "$STOPF" ] && { say "Bye."; break; }
 done
-cleanup
-nohup "$HOME/bin/brain-file" >/dev/null 2>&1 &

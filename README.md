@@ -92,11 +92,29 @@ cd ~/brain && claude
 ### 5. Use it
 
 ```bash
-cd ~/brain && dhyan              # hands-free, rear camera
-cd ~/brain && dhyan --no-camera  # voice only
-cd ~/brain && dhyan --front      # front camera
-cd ~/brain && claude             # type to Claude; try "take a photo and tell me what this is"
+dhyan                 # tap-to-talk: "Talk" button in the notification (or Enter in Termux)
+dhyan --always        # keep listening after every answer
+dhyan --no-camera     # voice only          dhyan --front   # front camera
+dhyan --type          # type instead of speaking
+cd ~/brain && claude  # full Claude Code; try "take a photo and tell me what this is"
 ```
+
+**Talking to Dhyan**
+
+| You do / say | What happens |
+|---|---|
+| Tap **Talk** in the notification (works from the lock screen) | It buzzes and listens |
+| Pause briefly mid-sentence | It keeps listening and joins the pieces into one message |
+| Say **"over"** at the end | Sends immediately |
+| Stay silent for a few seconds | Sends what it heard |
+| After an answer | It listens once more for a follow-up, then waits for the next tap |
+| **"switch to drone project"** / **"work on my YouTube idea"** | New conversation for that project, with its notes loaded. It matches by meaning: "drone" finds `quadcopter-diy` |
+| **"new topic"** | Fresh conversation, no project |
+| **"which project"** · **"list projects"** | Tells you |
+| **"stop"** or the notification's **Stop** button | Ends and files the conversation |
+
+Each project's conversation is filed into `~/brain/topics/<project>/` when you switch
+away or stop.
 
 Connect Bluetooth earphones first. Answers play through whatever audio device Android
 is using. On a mid-range phone the first answer takes ~15–20 s (Claude starting up),

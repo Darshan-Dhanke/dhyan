@@ -1,30 +1,49 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# brain-file — files new Claude conversations from ~/brain into topics/ and, if a
-# git remote is set, pushes them. Runs automatically after `claude` and `dhyan`.
+# brain-file — files finished Claude conversations into ~/brain/topics and, if a git
+# remote is set, pushes them. Runs automatically after `claude` and `dhyan`.
+#
+# Each conversation is filed once, after it has finished:
+#   - skipped while a running dhyan conversation holds .queue/active.<session-id>
+#   - skipped if written to in the last 60 s (probably still open)
+#   - remembered in .queue/filed afterwards
 cd "$HOME/brain" || exit 0
-mkdir -p .queue
-mkdir .queue/lock 2>/dev/null || exit 0
+Q=.queue; mkdir -p "$Q"; touch "$Q/filed"
+mkdir "$Q/lock" 2>/dev/null || exit 0
 trap 'rmdir "$HOME/brain/.queue/lock" 2>/dev/null' EXIT
-[ -f .queue/last ] || touch .queue/last
+
 # conversations from `claude` in ~/brain and from `dhyan` voice mode (~/.dhyan-voice)
 P=$(ls -d "$HOME"/.claude/projects/*com-termux-files-home-brain \
           "$HOME"/.claude/projects/*com-termux-files-home--dhyan-voice 2>/dev/null)
 [ -n "$P" ] || exit 0
-stamp=.queue/stamp.$$; touch "$stamp"
-for t in $(find $P -maxdepth 1 -name '*.jsonl' -newer .queue/last 2>/dev/null); do
-  grep -q 'File the conversation transcript at' "$t" && continue   # skip filing runs
-  [ "$(wc -l < "$t")" -lt 4 ] && continue                          # skip tiny sessions
+
+# first run after upgrading from the timestamp-based version: treat old ones as filed
+if [ -f "$Q/last" ] && [ ! -s "$Q/filed" ]; then
+  find $P -maxdepth 1 -name '*.jsonl' ! -newer "$Q/last" -printf '%f\n' 2>/dev/null \
+    | sed 's/\.jsonl$//' >> "$Q/filed"
+fi
+
+now=$(date +%s)
+for t in $(find $P -maxdepth 1 -name '*.jsonl' 2>/dev/null); do
+  id=$(basename "$t" .jsonl)
+  grep -qx "$id" "$Q/filed" && continue
+  [ -e "$Q/active.$id" ] && continue
+  [ $(( now - $(stat -c %Y "$t") )) -lt 60 ] && continue
+  if grep -q 'File the conversation transcript at' "$t" || [ "$(wc -l < "$t")" -lt 4 ]; then
+    echo "$id" >> "$Q/filed"; continue    # filing runs themselves, tiny sessions
+  fi
   rel="/root${t#$HOME}"
   BRAIN_FILING=1 timeout 600 "$HOME/bin/claude-raw" -p --model haiku \
     --allowedTools "Read" "Write" "Edit" "Glob" "Grep" -- \
 "File the conversation transcript at $rel into this knowledge base.
-1. Decide its main topic (reuse an existing topic folder from index.md if it fits; otherwise create topics/<short-kebab-slug>/).
+1. If the first user message says 'Project: <name>' (and not 'none'), file it under topics/<name>/.
+   Otherwise decide the main topic (reuse an existing folder from index.md if it fits; else create topics/<short-kebab-slug>/).
+   If the conversation clearly covers several unrelated topics, file each part into its own topic folder.
 2. Append a dated section to topics/<slug>/notes.md: what was asked, key answers/decisions, and open follow-ups. Be concise.
 3. Save any substantial code from the conversation into topics/<slug>/code/ with sensible filenames.
 4. Update index.md (one line per topic, with today's date).
-If the conversation was trivial (greetings, one-word tests, setup checks), do nothing." >/dev/null 2>&1
+If the conversation was trivial (greetings, one-word tests, setup checks), do nothing." >/dev/null 2>&1 \
+    && echo "$id" >> "$Q/filed"
 done
-mv "$stamp" .queue/last
 git add -A >/dev/null 2>&1
 git commit -qm "brain: file sessions $(date +%F_%H%M)" >/dev/null 2>&1 || exit 0
 git remote get-url origin >/dev/null 2>&1 && git push -q origin HEAD >/dev/null 2>&1

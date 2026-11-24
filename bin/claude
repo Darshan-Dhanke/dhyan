@@ -10,6 +10,6 @@ termux-wake-lock 2>/dev/null
 "$HOME/bin/claude-raw" "$@"
 rc=$?
 if [ "$PWD" = "$HOME/brain" ] && [ -z "${BRAIN_NO_FILE:-}" ]; then
-  nohup "$HOME/bin/brain-file" >/dev/null 2>&1 &
+  nohup bash -c "sleep 65; '$HOME/bin/brain-file'" >/dev/null 2>&1 &
 fi
 exit $rc

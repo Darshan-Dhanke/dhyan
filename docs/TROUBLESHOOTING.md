@@ -44,6 +44,19 @@ after that answers take a few seconds. Each answer prints its timing, like
 - Test without voice: `DHYAN_ASK="what do you see?" dhyan`.
 - Check your internet connection and that `cd ~/brain && claude` works interactively.
 
+### My sentence got cut in half
+Android's recogniser stops at short pauses. Dhyan keeps listening and joins the pieces,
+but a long silence (a few seconds) sends the message. End with "over" to send on
+purpose. To disable joining: `DHYAN_JOIN=0 dhyan`.
+
+### The notification's Talk button does nothing
+Termux:API needs notification permission (Android 13+: *Settings → Apps → Termux:API →
+Notifications*). Pressing Enter in the Termux window works as a fallback.
+
+### "switch to …" picked the wrong project / made a new one
+Say the project's name closer to its folder name (`list projects` reads them out).
+Wrong new folders can simply be deleted from `~/brain/topics/`.
+
 ### Photos are black
 The camera saw nothing: the phone was face-down or the lens was covered, or the room
 is dark. Ask Claude to `termux-torch on` first, or use `dhyan --front`.
