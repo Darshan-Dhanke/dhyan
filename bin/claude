@@ -1,0 +1,15 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# `claude` for Termux: starts the hardware helper, runs Claude Code in Ubuntu,
+# and afterwards files new ~/brain conversations in the background.
+Q="$PREFIX/tmp/dhyan-hw"
+if ! { [ -f "$Q/daemon.pid" ] && kill -0 "$(cat "$Q/daemon.pid")" 2>/dev/null; }; then
+  nohup "$HOME/bin/dhyan-hw" >/dev/null 2>&1 &
+  sleep 0.5
+fi
+termux-wake-lock 2>/dev/null
+"$HOME/bin/claude-raw" "$@"
+rc=$?
+if [ "$PWD" = "$HOME/brain" ] && [ -z "${BRAIN_NO_FILE:-}" ]; then
+  nohup "$HOME/bin/brain-file" >/dev/null 2>&1 &
+fi
+exit $rc

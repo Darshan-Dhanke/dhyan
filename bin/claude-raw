@@ -1,0 +1,7 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Runs Claude Code inside Ubuntu, in the current folder, with Termux's home as /root.
+# PROOT_NO_SECCOMP avoids proot hanging on exit on newer Android kernels.
+export PROOT_NO_SECCOMP=1
+exec proot-distro login ubuntu --termux-home --shared-tmp --work-dir "$PWD" -- \
+  env PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  BRAIN_FILING="${BRAIN_FILING:-}" claude "$@"

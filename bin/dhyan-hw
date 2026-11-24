@@ -1,0 +1,27 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# dhyan-hw — runs in Termux and executes termux-* hardware commands requested by
+# Claude Code inside Ubuntu (Termux:API hangs when called from inside proot).
+# Requests arrive as files in $PREFIX/tmp/dhyan-hw (shared with Ubuntu as /tmp).
+# Only commands named termux-<something> are allowed.
+Q="$PREFIX/tmp/dhyan-hw"; mkdir -p "$Q"; chmod 700 "$Q"
+echo $$ > "$Q/daemon.pid"
+while true; do
+  for req in "$Q"/*.req; do
+    [ -e "$req" ] || continue
+    id="${req%.req}"; mv "$req" "$id.run" 2>/dev/null || continue
+    (
+      mapfile -d '' args < "$id.run"
+      cwd="${args[0]}"; cmd=("${args[@]:1}")
+      cwd="${cwd/#\/root/$HOME}"
+      for i in "${!cmd[@]}"; do cmd[$i]="${cmd[$i]/#\/root\//$HOME/}"; done
+      if [[ "${cmd[0]}" =~ ^termux-[a-z-]+$ ]] && command -v "${cmd[0]}" >/dev/null; then
+        cd "$cwd" 2>/dev/null || cd "$HOME"
+        timeout 180 "${cmd[@]}" > "$id.out" 2> "$id.err"; echo $? > "$id.code"
+      else
+        echo "not allowed: ${cmd[0]}" > "$id.err"; echo 126 > "$id.code"
+      fi
+      rm -f "$id.run"; touch "$id.done"
+    ) &
+  done
+  sleep 0.2
+done

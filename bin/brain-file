@@ -1,0 +1,29 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# brain-file — files new Claude conversations from ~/brain into topics/ and, if a
+# git remote is set, pushes them. Runs automatically after `claude` and `dhyan`.
+cd "$HOME/brain" || exit 0
+mkdir -p .queue
+mkdir .queue/lock 2>/dev/null || exit 0
+trap 'rmdir "$HOME/brain/.queue/lock" 2>/dev/null' EXIT
+[ -f .queue/last ] || touch .queue/last
+P=$(ls -d "$HOME"/.claude/projects/*com-termux-files-home-brain 2>/dev/null | head -1)
+[ -d "$P" ] || exit 0
+stamp=.queue/stamp.$$; touch "$stamp"
+for t in $(find "$P" -maxdepth 1 -name '*.jsonl' -newer .queue/last 2>/dev/null); do
+  grep -q 'File the conversation transcript at' "$t" && continue   # skip filing runs
+  [ "$(wc -l < "$t")" -lt 4 ] && continue                          # skip tiny sessions
+  rel="/root${t#$HOME}"
+  BRAIN_FILING=1 timeout 600 "$HOME/bin/claude-raw" -p --model haiku \
+    --allowedTools "Read" "Write" "Edit" "Glob" "Grep" -- \
+"File the conversation transcript at $rel into this knowledge base.
+1. Decide its main topic (reuse an existing topic folder from index.md if it fits; otherwise create topics/<short-kebab-slug>/).
+2. Append a dated section to topics/<slug>/notes.md: what was asked, key answers/decisions, and open follow-ups. Be concise.
+3. Save any substantial code from the conversation into topics/<slug>/code/ with sensible filenames.
+4. Update index.md (one line per topic, with today's date).
+If the conversation was trivial (greetings, one-word tests, setup checks), do nothing." >/dev/null 2>&1
+done
+mv "$stamp" .queue/last
+git add -A >/dev/null 2>&1
+git commit -qm "brain: file sessions $(date +%F_%H%M)" >/dev/null 2>&1 || exit 0
+git remote get-url origin >/dev/null 2>&1 && git push -q origin HEAD >/dev/null 2>&1
+exit 0
