@@ -69,11 +69,19 @@ the hook finishes ("Hook cancelled"), so scanning transcripts is more reliable.
 ## The `dhyan` loop
 
 1. Vibrate briefly, then `termux-speech-to-text` (Android's recogniser).
-2. Take a photo with `termux-camera-photo` (unless `--no-camera`).
-3. `claude -p --continue` with the question and the photo path; only `Read`,
+2. Say "One moment" (in the background) so you know it heard you.
+3. Take a photo with `termux-camera-photo` (unless `--no-camera`).
+4. `claude -p --continue` with the question and the photo path; only `Read`,
    `WebSearch` and `WebFetch` are allowed, so voice mode can't change files.
-4. `termux-tts-speak` the answer.
-5. On "stop", file the session.
+5. `termux-tts-speak` the answer.
+6. On "stop", file the session into `~/brain`.
 
-Each answer takes a few seconds: the camera, Claude's round trip and proot start-up
-all add up. It's a conversation, not a live video stream.
+Voice mode runs Claude from its own small folder, `~/.dhyan-voice`, not from
+`~/brain`. Measured on a mid-range phone (Snapdragon 680), a one-line answer took
+**~10 s** from a small folder but **~37 s** from `~/brain`: Claude Code's start-up
+scan of a bigger project folder is slow under proot. `brain-file` picks up voice
+conversations from both folders.
+
+Where the time goes per question (same phone): photo ~2.4 s, speaking ~3 s, Claude
+start-up and answer ~10 s. Model choice (Haiku, Sonnet, Opus) made little difference;
+start-up dominates. It's a conversation, not a live video stream.

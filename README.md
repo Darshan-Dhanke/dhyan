@@ -99,7 +99,10 @@ cd ~/brain && claude             # type to Claude; try "take a photo and tell me
 ```
 
 Connect Bluetooth earphones first. Answers play through whatever audio device Android
-is using.
+is using. Expect roughly 10–15 seconds per spoken answer on a mid-range phone; you'll
+hear "One moment" as soon as it has heard you.
+
+**Updating:** `cd ~/dhyan && git pull && bash install.sh`
 
 ### 6. (Optional) Back up your brain to a private GitHub repo
 

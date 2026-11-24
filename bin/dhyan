@@ -6,7 +6,21 @@
 #   dhyan              camera on (rear)
 #   dhyan --no-camera  voice only
 #   dhyan --front      use the front camera
-cd "$HOME/brain" || { echo "~/brain not found — run install.sh first"; exit 1; }
+#
+# Runs Claude from a small folder (~/.dhyan-voice): starting Claude inside the
+# bigger ~/brain project is ~4x slower under proot. Conversations are still filed
+# into ~/brain afterwards by brain-file.
+V="$HOME/.dhyan-voice"
+mkdir -p "$V/inbox"
+[ -f "$V/CLAUDE.md" ] || cat > "$V/CLAUDE.md" <<'EOF'
+# Dhyan voice mode
+You are answering spoken questions on the user's Android phone. Answers are read aloud
+through earphones: 1-3 short sentences, plain text, no markdown or lists.
+A photo from the phone camera may be attached for each question; use it when the
+question is about what the user is looking at. Say so if the photo is dark or blurry.
+The user's notes live in /root/brain (index.md lists topics) if they ask about them.
+EOF
+cd "$V" || exit 1
 CAM=0; USE_CAM=1
 for a in "$@"; do
   case "$a" in
@@ -14,29 +28,32 @@ for a in "$@"; do
     --front) CAM=1 ;;
   esac
 done
-mkdir -p inbox
 first=1
 termux-tts-speak "Dhyan is listening."
 while true; do
   termux-vibrate -d 60 >/dev/null 2>&1
+  echo "(listening…)"
   q=$(termux-speech-to-text 2>/dev/null | tr -d '\r' | tail -n 1)
   [ -z "$q" ] && continue
   echo "you: $q"
   case "${q,,}" in
     stop|goodbye|"stop listening"|exit|bye) termux-tts-speak "Bye."; break ;;
   esac
-  prompt="Spoken question from the user (answer in 1-3 short spoken sentences, no markdown): $q"
+  termux-tts-speak "One moment." >/dev/null 2>&1 &
+  prompt="Spoken question: $q"
   if [ $USE_CAM = 1 ]; then
-    img="$PWD/inbox/$(date +%s).jpg"
-    termux-camera-photo -c $CAM "$img" >/dev/null 2>&1
-    [ -s "$img" ] && prompt="$prompt
-A photo from the phone camera taken just now is at /root${img#$HOME} — read it if the question is about what the user is looking at."
+    name="$(date +%s).jpg"
+    termux-camera-photo -c $CAM "$V/inbox/$name" >/dev/null 2>&1
+    [ -s "$V/inbox/$name" ] && prompt="$prompt
+Photo just taken by the phone camera: inbox/$name"
   fi
+  echo "(thinking…)"
   if [ $first = 1 ]; then cont=""; first=0; else cont="--continue"; fi
   a=$(BRAIN_NO_FILE=1 claude -p $cont --allowedTools "Read" "WebSearch" "WebFetch" -- "$prompt" 2>/dev/null)
   [ -z "$a" ] && a="Sorry, I couldn't get an answer."
   echo "dhyan: $a"
+  wait   # let "One moment" finish before the answer
   termux-tts-speak "$a"
-  ls -1t inbox/*.jpg 2>/dev/null | tail -n +21 | xargs -r rm -f   # keep last 20 photos
+  ls -1t "$V"/inbox/*.jpg 2>/dev/null | tail -n +21 | xargs -r rm -f   # keep last 20 photos
 done
 nohup "$HOME/bin/brain-file" >/dev/null 2>&1 &

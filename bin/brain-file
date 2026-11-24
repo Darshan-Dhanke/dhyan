@@ -6,10 +6,12 @@ mkdir -p .queue
 mkdir .queue/lock 2>/dev/null || exit 0
 trap 'rmdir "$HOME/brain/.queue/lock" 2>/dev/null' EXIT
 [ -f .queue/last ] || touch .queue/last
-P=$(ls -d "$HOME"/.claude/projects/*com-termux-files-home-brain 2>/dev/null | head -1)
-[ -d "$P" ] || exit 0
+# conversations from `claude` in ~/brain and from `dhyan` voice mode (~/.dhyan-voice)
+P=$(ls -d "$HOME"/.claude/projects/*com-termux-files-home-brain \
+          "$HOME"/.claude/projects/*com-termux-files-home--dhyan-voice 2>/dev/null)
+[ -n "$P" ] || exit 0
 stamp=.queue/stamp.$$; touch "$stamp"
-for t in $(find "$P" -maxdepth 1 -name '*.jsonl' -newer .queue/last 2>/dev/null); do
+for t in $(find $P -maxdepth 1 -name '*.jsonl' -newer .queue/last 2>/dev/null); do
   grep -q 'File the conversation transcript at' "$t" && continue   # skip filing runs
   [ "$(wc -l < "$t")" -lt 4 ] && continue                          # skip tiny sessions
   rel="/root${t#$HOME}"

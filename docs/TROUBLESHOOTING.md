@@ -35,6 +35,14 @@ it still happens, swipe Termux away and reopen it, or long-press → **Kill proc
 Android's phantom-process killer. Redo step 2 of the README. Some phones reset this
 after a reboot.
 
+### Answers take a long time / voice mode seems stuck
+Each answer starts a fresh Claude Code process inside proot. Start-up time grows with
+the size of the folder Claude starts in, which is why `dhyan` runs from
+`~/.dhyan-voice` (~10 s per answer on a mid-range phone) instead of `~/brain`
+(~37 s). The screen shows `(thinking…)` while it works, and you'll hear "One moment"
+right after it hears you. If an answer never arrives, check your internet connection
+and that `cd ~/brain && claude` works interactively.
+
 ### Photos are black
 The camera saw nothing: the phone was face-down or the lens was covered, or the room
 is dark. Ask Claude to `termux-torch on` first, or use `dhyan --front`.
